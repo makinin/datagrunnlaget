@@ -1,0 +1,20 @@
+
+<!-- README.md is generated from README.Rmd. Please edit that file -->
+
+# datagrunnlaget
+
+The goal of datagrunnlaget is to provide tables with indicators for open
+and closed budget frame from chapter 4. in “Blåtthefte”.
+
+All usage and calculation results are the users responsibility. NSD is
+not responsible for any result calculated by users outside NSD. The main
+branch consists sripts for producing the tables and theirs export to
+excel.
+
+**Description of file folder organizaton**
+
+  - rscript folder has data import of necessary tables from DBH-API,
+    calculations and data export to excel file
+
+  - data folder has list of institutions inculded in “Blåtthefte” and
+    list of exception for inicators.
