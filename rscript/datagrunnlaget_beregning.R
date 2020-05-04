@@ -3,9 +3,11 @@ library(rdbhapi)
 library(tidyverse)
 library(reader)
 library(readxl)
+library(openxlsx)
 
 
 # DBH-tabeller for Blåtthefte med API-valg
+
 
 finsystabeller <-
   tribble(~tabellnavn, ~table_id, ~group_by,~filters,
@@ -21,9 +23,19 @@ finsystabeller <-
           "økonomi", 902, NULL, list("Årstall"=c("top",2))
   )
 
-# Hjelpefunksjon som laster ned finsystabellene
 
 
+#' Hjelpefunksjon som laster ned finsystabellene
+#'
+#' @param tabellnavn 
+#' @param table_id 
+#' @param group_by 
+#' @param filters 
+#'
+#' @return
+#' @export
+#'
+#' @examples
 hent_dbh_data_wrapper <- function(tabellnavn, table_id, group_by,  filters) {
   pb$tick()$print()
   res <- 
@@ -214,6 +226,17 @@ finsys_data <-
 
 ## Lager tabeller med produksjonsdata, tilsvarende dem i Blått hefte ----
 
+#' Title
+#'
+#' @param df 
+#' @param filter_indikatorer 
+#' @param kolonne_vars 
+#' @param funs 
+#'
+#' @return
+#' @export
+#'
+#' @examples
 lag_produksjonstabell <- function(df,
                                   filter_indikatorer, # indikatorene som skal inngå i tabellen
                                   kolonne_vars, # variablene som skal spres på kolonner (indikator/kategori/osv.)
@@ -236,6 +259,7 @@ lag_produksjonstabell <- function(df,
     mutate_if(is.numeric, funs)
 }
 
+
 produksjonstabeller <- 
   tribble(~filter_indikatorer, ~kolonne_vars, ~funs,
           "studiepoeng", "kategori", NA,
@@ -248,4 +272,23 @@ produksjonstabeller <-
       lag_produksjonstabell(...)
   })
 
+# expot i excel 
 
+
+studiepoeng<-produksjonstabeller[[1]]
+kandidater<-produksjonstabeller[[2]]
+utveksling_doktorgrader<-produksjonstabeller[[3]]
+publisering_eu_nfr_boa<-produksjonstabeller[[4]]
+
+wb <- createWorkbook()
+addWorksheet(wb, "studiepoeng")
+addWorksheet(wb, "kandidater")
+addWorksheet(wb, "utveksling_doktorgrader")
+addWorksheet(wb, "publisering_eu_nfr_boa")
+
+writeDataTable(wb, "studiepoeng", x = studiepoeng)
+writeDataTable(wb, "kandidater", x = kandidater)
+writeDataTable(wb, "utveksling_doktorgrader", x = utveksling_doktorgrader)
+writeDataTable(wb, "publisering_eu_nfr_boa", x = publisering_eu_nfr_boa)
+
+saveWorkbook(wb, "Blåttheftetabeller.xlsx", overwrite = TRUE)
