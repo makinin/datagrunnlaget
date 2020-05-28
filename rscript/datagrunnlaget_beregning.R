@@ -1,98 +1,71 @@
 ## Laster pakker ----
 library(rdbhapi)
 library(tidyverse)
-library(reader)
-library(readxl)
 library(openxlsx)
 
+## Leser og filtrerer data til finansieringssystemet ----
 
-# DBH-tabeller for Blåtthefte med API-valg
+# DBH-tabeller med API-valg
 
-
-finsystabeller <-
-  tribble(~tabellnavn, ~table_id, ~group_by,~filters,
+finsys_dbh_spørringer <-
+  tribble(~tabellnavn, ~table_id, ~group_by, ~filters,
+          "studiepoeng", 900, NULL, list(Årstall = c("top", 2)),
+          "kandidater", 907, NULL, list(Årstall = c("top", 2)),
+          "utveksling", 142, c("Årstall", "Institusjonskode", "Utvekslingsavtale","Type", "Nivåkode"), list(Årstall = c("top", 2)),
+          "økonomi", 902, NULL, list(Årstall = c("top", 2)),
+          "publisering", 373, c("Årstall", "Institusjonskode"), list(Årstall = c("top", 2)),
+          "doktorgrader", 101, c("Institusjonskode", "Årstall"), list(Årstall = c("top", 2)),
+          "doktorgrader_samarbeid", 100, c("Årstall", "Institusjonskode (arbeidsgiver)"), list(Årstall = c("top", 2)),
+          "PKU", 98, NULL, list(Årstall = c("top", 2)),
           "institusjoner", 211, NULL, NULL,
-          "institusjonstyper",287,NULL,NULL,
-          "studiepoeng", 900, NULL, list("Årstall"=c("top",2)),
-          "doktorgrader", 101, c("Institusjonskode", "Årstall"), list("Årstall"=c("top",2)),
-          "doktorgrader_samarbeid", 100, c("Årstall", "Institusjonskode (arbeidsgiver)"), list("Årstall"=c("top",2)),
-          "PKU", 98, NULL, list("Årstall"=c("top",2)),
-          "kandidater", 907, NULL, list("Årstall"=c("top",2)),
-          "publisering", 373, c("Årstall", "Institusjonskode"), list("Årstall"=c("top",2)),
-          "utveksling", 142, c("Årstall", "Institusjonskode", "Utvekslingsavtale","Type", "Nivåkode"), list("Årstall"=c("top",2)),
-          "økonomi", 902, NULL, list("Årstall"=c("top",2))
   )
 
 
-
-#' Hjelpefunksjon som laster ned finsystabellene
-#'
-#' @param tabellnavn 
-#' @param table_id 
-#' @param group_by 
-#' @param filters 
-#'
-#' @return
-#' @export
-#'
-#' @examples
-hent_dbh_data_wrapper <- function(tabellnavn, table_id, group_by,  filters) {
-  pb$tick()$print()
-  res <- 
-    do.call(dbh_data,
-            c(list(table_id = table_id,
-                   group_by = group_by, filters=filters)
-            ))%>%
-    
-    rename_all(str_to_lower)
-  assign(str_c(tabellnavn, "_org"), res, envir = .GlobalEnv)
-  return(tabellnavn)
-}
-
 # Laster ned alle finsystabellene
 
-pb <- progress_estimated(nrow(finsystabeller))
-pmap(finsystabeller, hent_dbh_data_wrapper)
+finsys_dbh <- 
+  local({
+    pb <- progress_estimated(nrow(finsys_dbh_spørringer))
+    res <- 
+      pmap(finsys_dbh_spørringer,
+           function(tabellnavn, ...) {
+             pb$tick()$print()
+             res <- 
+               do.call(dbh_data,
+                       list(...)) %>% 
+               rename_all(str_to_lower)
+             res <- setNames(list(res), tabellnavn)
+             res
+           })
+    pb$stop()$print()
+    unlist(res, recursive = FALSE)
+  })
 
+finsys <- finsys_dbh
 
-## Håndterer institusjonsendringer ----
+# Leser oversikt over institusjoner som er inkludert i finansieringssystemet, og unntatt fra enkeltindikatorer
 
+finsys_utvalg <- 
+  c("institusjoner", "unntak") %>%
+  setNames(.,.) %>% 
+  map(~read_tsv(file.path("data", sprintf("finsys_%s.tsv", .)),
+                col_types = cols(budsjettår = col_integer(),
+                                .default = col_character())))
 
-institusjoner <-
-  institusjoner_org %>%
-  mutate(institusjonskode_nyeste = institusjoner_org$`institusjonskode (sammenslått)`, institusjonskode_gammel=institusjoner_org$institusjonskode
-           ) %>% merge(institusjonstyper_org, by="institusjonstypekode", all.x = TRUE)
+# Viderefører inneværende utvalg
+finsys_utvalg$institusjoner <- 
+  finsys_utvalg$institusjoner %>% 
+  complete(institusjonskode, budsjettår = 2020:2021)
 
-## Leser manuelle tabeller for satser mm. ---
+finsys_utvalg$unntak <- 
+  finsys_utvalg$unntak %>% 
+  complete(nesting(institusjonskode, indikator), budsjettår = 2020:2021)
 
-c("tilskuddsgrad",
-  "unntak",
-  "institusjoner_finsys") %>% 
-  walk(~assign(.,
-               as_tibble(read_xlsx("data/finsysinfo.xlsx", sheet = .)),
-               
-               envir = .GlobalEnv))
+## Filtrerer finsystabeller til hva som gir uttelling, og harmoniserer
+## variabelnavn og -verdier til sammenslåing
 
-
-unntak <- unntak %>% 
-  complete(budsjettår = 2020:2021,
-           nesting(indikator, institusjonskode))
-
-# Inkluderer også tall fra forløperinstitusjoner til de som er inkludert for 2020.
-institusjoner_finsys <- institusjoner_finsys %>% 
-  bind_rows(semi_join(institusjoner,
-                      institusjoner_finsys,
-                      by = c("institusjonskode_nyeste" = "institusjonskode")) %>% 
-              select(institusjonskode = institusjonskode_gammel)) %>% 
-  complete(budsjettår = 2020:2021,
-           institusjonskode) %>% 
-  drop_na(budsjettår)
-
-
-## Filtrerer finsystabeller til hva som gir uttelling, og harmoniserer til sammenslåing ----
-
-studiepoeng <-
-  studiepoeng_org %>%
+finsys$studiepoeng <-
+  finsys_dbh$studiepoeng %>%
   rename(indikatorverdi = `ny produksjon egentfin`) %>%
   # Bruker finansieringskategorien basert på studentens tilhørighet for BI og for emnet ellers
   mutate(kategori =
@@ -104,8 +77,8 @@ studiepoeng <-
   filter(kategori %in% LETTERS[1:6],
          studentkategori == "S")
 
-kandidater <-
-  kandidater_org %>% 
+finsys$kandidater <-
+  finsys_dbh$kandidater %>% 
   rename(faktor = `uttelling kode:1=enkel, 2=dobbel`,
          etterrapportert = etterrapp,
          innpasset = `dobbel til enkel`,
@@ -119,66 +92,52 @@ kandidater <-
          key = "kandidatgruppe",
          value = "indikatorverdi")
 
-erasmus_plus<-utveksling_org %>% 
+finsys$utveksling <- 
+  finsys_dbh$utveksling %>% 
   rename(indikatorverdi = `antall totalt`) %>% 
-  mutate_at(c("utvekslingsavtale", "type"), str_to_upper) %>%
-  filter(utvekslingsavtale == "ERASMUS+" & nivåkode!= "FU" & type=="NORSK") %>% 
-  mutate(kategori="Erasmus+")
+  mutate_at(c("utvekslingsavtale", "type", "nivåkode"), str_to_upper) %>%
+  filter(nivåkode != "FU") %>% 
+  mutate(kategori = 
+           case_when(utvekslingsavtale == "ERASMUS+" & type == "NORSK"
+                     ~ "Erasmus+",
+                     utvekslingsavtale != "INDIVID" 
+                     ~ "ordinær")) %>% 
+  drop_na(kategori)
 
-utenlandsk<- utveksling_org %>% 
-  rename(indikatorverdi = `antall totalt`) %>% 
-  mutate_at(c("utvekslingsavtale", "type"), str_to_upper) %>%
-  filter(utvekslingsavtale != "INDIVID" & nivåkode!= "FU" & type=="UTENL") %>% 
-  mutate(kategori="ordinær")
-
-utreisende_norsk<- utveksling_org %>% 
-  rename(indikatorverdi = `antall totalt`) %>% 
-  mutate_at(c("utvekslingsavtale", "type"), str_to_upper) %>%
-  filter(!utvekslingsavtale %in% c("ERASMUS+","INDIVID") & nivåkode!= "FU" & type=="NORSK") %>% 
-  mutate(kategori="ordinær")
-
-utveksling<-bind_rows(erasmus_plus,utenlandsk,utreisende_norsk)
-
-doktorgrader <- 
-  doktorgrader_org %>% 
-  rename(indikatorverdi = `antall totalt`) %>%
-  add_column(kandidatgruppe = "ordinær") %>% 
-  bind_rows(
-    doktorgrader_samarbeid_org %>%
-      rename(institusjonskode = `institusjonskode (arbeidsgiver)`) %>% 
-      count(årstall, institusjonskode, name = "indikatorverdi") %>% 
-      add_column(kandidatgruppe = "samarbeids-ph.d.",
-                 faktor = 0.2),
-    PKU_org %>% 
-      rename(indikatorverdi = antall) %>% 
-      add_column(kandidatgruppe = "PKU"))
-
-publisering <- 
-  publisering_org %>% 
+finsys$doktorgrader <- 
+  list(ordinær = finsys_dbh$doktorgrader,
+       `samarbeids-ph.d.` = finsys_dbh$doktorgrader_samarbeid,
+       PKU = finsys_dbh$PKU) %>% 
+  map_dfr(~setNames(., str_replace_all(names(.),
+                                       c("antall($| totalt)" = "indikatorverdi",
+                                         "institusjonskode.*" = "institusjonskode"))),
+          .id = "kandidatgruppe") %>% 
+  mutate(faktor = case_when(kandidatgruppe == "samarbeids-ph.d." ~ 0.2))
+  
+finsys$publisering <- 
+  finsys_dbh$publisering %>% 
   rename(indikatorverdi = publiseringspoeng)
 
-økonomi <- 
-  økonomi_org %>% 
+finsys$økonomi <- 
+  finsys_dbh$økonomi %>% 
   rename(EU = eu) %>% 
   mutate(forskningsråd = map2_dbl(nfr, rff, sum, na.rm = TRUE),
-         BOA = map2_dbl(bidrag, oppdrag, sum, na.rm = TRUE))
+         BOA = map2_dbl(bidragsinntekter, oppdragsinntekter, sum, na.rm = TRUE))
 
-c("EU", "forskningsråd", "BOA") %>% 
-  walk(~assign(.,
-               select_at(økonomi, c("institusjonskode", "årstall", "indikatorverdi" = .)),
-               envir = .GlobalEnv))
+finsys <- 
+  c("EU", "forskningsråd", "BOA") %>% 
+  setNames(., .) %>% 
+  map(~select_at(finsys$økonomi,
+                 c("institusjonskode", "årstall", "indikatorverdi" = .))) %>% 
+  c(finsys)
 
-## Lager samletabell og beregner endringer og uttelling ----
+## Lager samletabell ----
 
 finsys_data <-
-  # Samler alle enkelttabellene
-  c("studiepoeng", "kandidater", "utveksling", "doktorgrader", "publisering", "EU", "forskningsråd", "BOA") %>%
-  setNames(., .) %>% 
-  map_df(get, .id = "indikator") %>%
-  mutate(budsjettår = årstall + 2) %>% 
-  # Summerer for variablene som skal beholdes
+  finsys[c("studiepoeng", "kandidater", "utveksling", "doktorgrader", "publisering", "EU", "forskningsråd", "BOA")] %>%
+  bind_rows(.id = "indikator") %>%
   group_by(
-    budsjettår,
+    årstall,
     institusjonskode,
     indikator, 
     kategori, 
@@ -186,109 +145,83 @@ finsys_data <-
     faktor) %>%
   summarise_at("indikatorverdi", sum, na.rm = TRUE) %>%
   ungroup %>% 
-  # Fyller ut med 0 for manglende kombinasjoner (forskring for å få endringstall riktig)
-  complete(budsjettår = full_seq(budsjettår, 1),
-           institusjonskode,
-           nesting(indikator, 
-                   kategori, 
-                   kandidatgruppe,
-                   faktor),
-           fill = list(indikatorverdi = 0)) %>%
-  # Legger til endringstall fra året før
-  group_by(
-    institusjonskode,
-    indikator, 
-    kategori, 
-    kandidatgruppe,
-    faktor) %>% 
-  arrange(budsjettår) %>% 
-  mutate(indikatorendring = indikatorverdi - lag(indikatorverdi)) %>%
-  ungroup %>% 
-  # Filtrerer ut institusjoner som ikke inngår i systemet eller har unntak for indikatorer
-  semi_join(institusjoner_finsys,
+  mutate(budsjettår = årstall + 2L,
+         indikatorverdi_produkt = indikatorverdi * replace_na(faktor, 1)) %>% 
+  semi_join(finsys_utvalg$institusjoner,
             by = c("institusjonskode", "budsjettår")) %>% 
-  anti_join(unntak,
-            by = c("institusjonskode", "budsjettår", "indikator")) %>%
-  
-  left_join(tilskuddsgrad,
-            by = c("institusjonskode", "budsjettår", "indikator")) %>% 
-  
-  # Legger til institusjonsinfo
-  left_join(select(institusjoner,
-                   institusjonskode, institusjonsnavn, kortnavn, institusjonskode_nyeste),
-            by = "institusjonskode") %>% 
-  left_join(select(institusjoner_finsys,
-                   institusjonskode,  budsjettår),
-            by = c("institusjonskode","budsjettår")) %>%  
-  mutate(budsjettår=as.factor(budsjettår))
+  anti_join(finsys_utvalg$unntak,
+            by = c("institusjonskode", "budsjettår", "indikator"))
 
+finsys$institusjoner <-
+  finsys_dbh$institusjoner %>%
+  rename(institusjonskode_nyeste = `institusjonskode (sammenslått)`,
+         institusjonsnavn_nyeste = `sammenslått navn`) %>% 
+  semi_join(finsys_data, by = "institusjonskode") %>% 
+  left_join(select(finsys$institusjoner,
+                   institusjonskode, kortnavn_nyeste = kortnavn),
+            by = c("institusjonskode_nyeste" = "institusjonskode"))
+
+## Eksporterer samletabell til Excel-format ----
+
+lagre_excel <- 
+  function(tabeller, filnavn) {
+  wb <- createWorkbook()
+  iwalk(tabeller,
+       function(tabell, tabellnavn) {
+         addWorksheet(wb, tabellnavn)
+         writeDataTable(wb, tabellnavn, tabell,
+                        tableStyle = "TableStyleLight1",
+                        tableName = tabellnavn)
+       })
+  saveWorkbook(wb, filnavn, overwrite = TRUE)
+  }
+
+lagre_excel(list(finsys_data = finsys_data,
+                 institusjoner = finsys$institusjoner),
+            "finsys_data.xlsx")
 
 
 ## Lager tabeller med produksjonsdata, tilsvarende dem i Blått hefte ----
 
-#' Title
-#'
-#' @param df 
-#' @param filter_indikatorer 
-#' @param kolonne_vars 
-#' @param funs 
-#'
-#' @return
-#' @export
-#'
-#' @examples
 lag_produksjonstabell <- function(df,
                                   filter_indikatorer, # indikatorene som skal inngå i tabellen
                                   kolonne_vars, # variablene som skal spres på kolonner (indikator/kategori/osv.)
                                   funs # tilleggsfunksjon som skal anvendes på kolonnene (for å lage andelstall)
 ) {
-  if (is.na(funs)) {
+  if (is.null(funs)) {
     funs <- identity
   }
   df %>% 
     filter(indikator %in% filter_indikatorer) %>% 
     unite_("kolonne_vars_samlet", kolonne_vars) %>% 
     group_by_at(c("institusjonskode_nyeste",
-                  "institusjonsnavn",
-                  "kortnavn",
+                  "institusjonsnavn_nyeste",
+                  "kortnavn_nyeste",
                   "kolonne_vars_samlet",
                   "budsjettår")) %>% 
     summarise_at("indikatorverdi", sum) %>% 
     ungroup() %>% 
     spread(key = "kolonne_vars_samlet", value = "indikatorverdi") %>%
-    mutate_if(is.numeric, funs)
+    mutate_at(vars(everything(), -matches("institusjon|navn|år")), funs)
 }
-
 
 produksjonstabeller <- 
   tribble(~filter_indikatorer, ~kolonne_vars, ~funs,
-          "studiepoeng", "kategori", NA,
-          "kandidater", c("kategori", "faktor"), NA,
-          c("doktorgrader", "utveksling"), c("indikator", "faktor", "kategori"), NA,
-          c("publisering", "EU", "forskningsråd", "BOA"),c("indikator") , list(pst = function(x) 100 * x / sum(x, na.rm = TRUE))) %>% 
+          "studiepoeng", "kategori", NULL,
+          "kandidater", c("kategori", "faktor"), NULL,
+          c("doktorgrader", "utveksling"), c("indikator", "faktor", "kategori"), NULL,
+          c("publisering", "EU", "forskningsråd", "BOA"), c("indikator") , list(pst = function(x) 100 * x / sum(x, na.rm = TRUE))) %>% 
   pmap(function(...) {
     finsys_data %>% 
-      filter(budsjettår == 2021) %>% 
+      filter(budsjettår == 2021) %>%
+      left_join(select(finsys$institusjoner,
+                       institusjonskode, institusjonskode_nyeste, institusjonsnavn_nyeste, kortnavn_nyeste),
+                by = "institusjonskode") %>% 
       lag_produksjonstabell(...)
-  })
+  }) 
 
-# expot i excel 
+names(produksjonstabeller) <-
+  c("studiepoeng", "kandidater", "utveksling_doktorgrader", "lukket_ramme")
 
-
-studiepoeng<-produksjonstabeller[[1]]
-kandidater<-produksjonstabeller[[2]]
-utveksling_doktorgrader<-produksjonstabeller[[3]]
-publisering_eu_nfr_boa<-produksjonstabeller[[4]]
-
-wb <- createWorkbook()
-addWorksheet(wb, "studiepoeng")
-addWorksheet(wb, "kandidater")
-addWorksheet(wb, "utveksling_doktorgrader")
-addWorksheet(wb, "publisering_eu_nfr_boa")
-
-writeDataTable(wb, "studiepoeng", x = studiepoeng)
-writeDataTable(wb, "kandidater", x = kandidater)
-writeDataTable(wb, "utveksling_doktorgrader", x = utveksling_doktorgrader)
-writeDataTable(wb, "publisering_eu_nfr_boa", x = publisering_eu_nfr_boa)
-
-saveWorkbook(wb, "Blåttheftetabeller.xlsx", overwrite = TRUE)
+lagre_excel(produksjonstabeller,
+            "produksjonstabeller.xlsx")
