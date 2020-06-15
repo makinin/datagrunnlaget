@@ -13,7 +13,7 @@ finsys_dbh_spørringer <-
           "kandidater", 907, NULL, list(Årstall = c("top", 2)),
           "utveksling", 142, c("Årstall", "Institusjonskode", "Utvekslingsavtale","Type", "Nivåkode"), list(Årstall = c("top", 2)),
           "økonomi", 902, NULL, list(Årstall = c("top", 2)),
-          "publisering", 373, c("Årstall", "Institusjonskode"), list(Årstall = c("top", 2)),
+          "publisering", 373, c("Årstall", "Institusjonskode"), list("Årstall" = c("top", 2), "Kode for type publiseringskanal"=c("1","2")),
           "doktorgrader", 101, c("Institusjonskode", "Årstall"), list(Årstall = c("top", 2)),
           "doktorgrader_samarbeid", 100, c("Årstall", "Institusjonskode (arbeidsgiver)"), list(Årstall = c("top", 2)),
           "PKU", 98, NULL, list(Årstall = c("top", 2)),
@@ -92,17 +92,27 @@ finsys$kandidater <-
          key = "kandidatgruppe",
          value = "indikatorverdi")
 
-finsys$utveksling <- 
-  finsys_dbh$utveksling %>% 
+finsys$erasmus_plus<-finsys_dbh$utveksling_org %>% 
   rename(indikatorverdi = `antall totalt`) %>% 
-  mutate_at(c("utvekslingsavtale", "type", "nivåkode"), str_to_upper) %>%
-  filter(nivåkode != "FU") %>% 
-  mutate(kategori = 
-           case_when(utvekslingsavtale == "ERASMUS+" & type == "NORSK"
-                     ~ "Erasmus+",
-                     utvekslingsavtale != "INDIVID" 
-                     ~ "ordinær")) %>% 
-  drop_na(kategori)
+  mutate_at(c("utvekslingsavtale", "type"), str_to_upper) %>%
+  filter(utvekslingsavtale == "ERASMUS+" & nivåkode!= "FU" & type=="NORSK") %>% 
+  mutate(kategori="Erasmus+")
+
+finsys$utenlandsk<-finsys_dbh$ utveksling_org %>% 
+  rename(indikatorverdi = `antall totalt`) %>% 
+  mutate_at(c("utvekslingsavtale", "type"), str_to_upper) %>%
+  filter(utvekslingsavtale != "INDIVID" & nivåkode!= "FU" & type=="UTENL") %>% 
+  mutate(kategori="ordinær")
+
+finsysutreisende_norsk<- finsys_dbh$utveksling_org %>% 
+  rename(indikatorverdi = `antall totalt`) %>% 
+  mutate_at(c("utvekslingsavtale", "type"), str_to_upper) %>%
+  filter(!utvekslingsavtale %in% c("ERASMUS+","INDIVID") & nivåkode!= "FU" & type=="NORSK") %>% 
+  mutate(kategori="ordinær")
+
+finsys$utveksling<-bind_rows(finsys$erasmus_plus,finsys$utenlandsk,finsys$utreisende_norsk)
+
+
 
 finsys$doktorgrader <- 
   list(ordinær = finsys_dbh$doktorgrader,
